@@ -1,0 +1,20 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+sqlalchemy[asyncio]==2.0.35
+asyncpg==0.29.0
+alembic==1.13.2
+redis==5.0.8
+rq==1.16.2
+qdrant-client==1.11.1
+httpx==0.27.2
+pyjwt[crypto]==2.9.0
+anthropic==0.34.2
+# tree-sitter-languages 1.10.2's bundled grammars use the old
+# Language(ptr, name) constructor, removed in tree-sitter>=0.22 — pinned
+# down to keep them working together.
+tree-sitter==0.21.3
+tree-sitter-languages==1.10.2
+pytest==8.3.3
+pytest-asyncio==0.24.0
+respx==0.21.1
