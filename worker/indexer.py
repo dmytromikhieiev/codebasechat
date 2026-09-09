@@ -17,6 +17,7 @@ from api.services.vector_store import (
     VectorPoint,
     delete_points_by_file_path,
     ensure_collection,
+    recreate_collection,
     upsert_points,
 )
 
@@ -99,9 +100,11 @@ async def _index_repo(repo_id: uuid.UUID, job_id: uuid.UUID) -> None:
         job.files_total = len(files)
         await db.commit()
 
-    await ensure_collection(repo_id)
+    # Full reindex — every chunk of the repo is rebuilt from scratch, so the
+    # Qdrant collection is dropped and recreated rather than just ensured:
+    # upsert alone would leave last run's points orphaned in it forever.
+    await recreate_collection(repo_id)
 
-    # Full reindex — every chunk of the repo is rebuilt from scratch.
     async with async_session_factory() as db:
         await db.execute(delete(ChunkRow).where(ChunkRow.repo_id == repo_id))
         await db.commit()
@@ -184,10 +187,15 @@ async def _index_repo_incremental(repo_id: uuid.UUID, job_id: uuid.UUID, base_sh
 
 
 async def _remove_file(repo_id: uuid.UUID, file_path: str) -> None:
-    await delete_points_by_file_path(repo_id, file_path)
+    # Postgres first: it's what retrieval actually queries (BM25 + the join
+    # in retrieval._load_chunks). If this crashes right after, Qdrant keeps
+    # a harmless, invisible orphan point — better than the reverse order,
+    # where a crash would leave a Postgres row still findable via BM25 for
+    # content we meant to delete.
     async with async_session_factory() as db:
         await db.execute(delete(ChunkRow).where(ChunkRow.repo_id == repo_id, ChunkRow.file_path == file_path))
         await db.commit()
+    await delete_points_by_file_path(repo_id, file_path)
 
 
 async def _index_file(repo_id: uuid.UUID, file: RepoFile) -> None:
@@ -225,11 +233,16 @@ async def _index_file(repo_id: uuid.UUID, file: RepoFile) -> None:
             )
         )
 
-    await upsert_points(repo_id, points)
-
+    # Postgres first, Qdrant second — same reasoning as _remove_file: a
+    # crash between the two writes should leave a chunk that's missing its
+    # vector (findable via BM25, self-heals on the next reindex) rather
+    # than a vector with no Postgres row behind it (a silent, permanent
+    # orphan — retrieval only ever looks chunks up by querying Postgres).
     async with async_session_factory() as db:
         db.add_all(chunk_rows)
         await db.commit()
+
+    await upsert_points(repo_id, points)
 
 
 def _now() -> datetime:

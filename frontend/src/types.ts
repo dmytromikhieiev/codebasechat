@@ -23,6 +23,12 @@ export interface RepoDetail extends Repo {
   error: string | null;
 }
 
+export interface AvailableRepo {
+  installation_id: number;
+  repo_full_name: string;
+  default_branch: string;
+}
+
 export interface Source {
   file_path: string;
   start_line: number;

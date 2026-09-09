@@ -29,16 +29,30 @@ Code conventions — see [`CLAUDE.md`](CLAUDE.md).
    register yourself, not a shared one: https://github.com/settings/apps/new
    (or under an organization). When creating it, set:
    - **Callback URL** (for OAuth login): `http://localhost:8000/api/v1/auth/callback`
-   - **Setup URL** / **Post installation** can be left empty — the
-     backend itself kicks off the install (`GET /api/v1/github/install`)
+   - **Setup URL** (under "Post installation" / "Identifying and
+     authorizing users"): `http://localhost:8000/api/v1/github/callback`,
+     with **"Redirect on update" checked**. This one is **required**,
+     not optional — without it, GitHub doesn't redirect anywhere after
+     install and just shows its own confirmation page; our backend never
+     learns the `installation_id`, so nothing gets indexed. (`GET
+     /api/v1/github/install` only handles the first half — sending the
+     browser *to* GitHub's install screen; the Setup URL is what brings
+     it *back*.)
    - **Webhook URL**: `http://localhost:8000/api/v1/webhooks/github`
      (for local development without a public address, proxy it through
      [smee.io](https://smee.io) or `ngrok`)
    - **Webhook secret** — make one up and save it, you'll need it in `.env`
    - **Permissions**: Repository → Contents: Read-only, Metadata: Read-only
+   - **Permissions**: Account → Email addresses: Read-only — **required**
+     for login: the app reads the user's primary email via `/user/emails`
+     when it isn't public on their profile. Without this permission the
+     callback fails with a 403 from GitHub (`github_email_permission_missing`).
    - **Subscribe to events**: Push
    - **Identifying and authorizing users** → enable "Request user
-     authorization (OAuth) during installation" — login won't work without it
+     authorization (OAuth) during installation" — login won't work without it.
+     Note: GitHub ignores any OAuth `scope` for GitHub Apps — access is
+     entirely determined by the Permissions configured here, not by scopes
+     requested at login time.
    - After creating the app, generate a **private key** (downloads a
      `.pem` file) and note down the **App ID**, **Client ID**,
      **Client secret**, and the app's **slug** (the last part of
@@ -53,11 +67,23 @@ Code conventions — see [`CLAUDE.md`](CLAUDE.md).
 cp .env.example .env
 ```
 
-Fill in `.env` with real values (see the variables table below). Place
-the GitHub App private key where `GITHUB_APP_PRIVATE_KEY_PATH` points —
-by default `/run/secrets/github_app_private_key.pem` inside the
-container; mount your `.pem` file there via a `docker-compose.override.yml`,
-or change the path in `.env` to something the `api` container can reach.
+Fill in `.env` with real values (see the variables table below).
+
+The GitHub App private key (downloaded when you generated it) needs to
+land inside the `api` and `worker` containers at the path
+`GITHUB_APP_PRIVATE_KEY_PATH` points to — by default
+`/run/secrets/github_app_private_key.pem`. `docker-compose.override.yml`
+(git-ignored, already in the repo) mounts it there for you:
+
+```bash
+mkdir -p secrets
+mv ~/Downloads/your-app.*.private-key.pem secrets/github_app_private_key.pem
+```
+
+That's it — no changes needed to `.env` or the override file, since the
+mounted path already matches the default `GITHUB_APP_PRIVATE_KEY_PATH`.
+If you name or place the file differently, edit the path in
+`docker-compose.override.yml` to match.
 
 ```bash
 docker compose up --build
@@ -109,6 +135,16 @@ Open `http://localhost:3000` and:
    GitHub App installation flow; after picking repositories it comes
    back to the dashboard and indexing starts in the background. Status
    and progress (files done/total) update automatically while indexing.
+
+   **If nothing happens after clicking Install on GitHub's side**, your
+   App's **Setup URL** is probably missing (see the app setup step
+   above) — GitHub has no way to tell us the installation happened
+   without it. As a fallback that doesn't depend on that redirect at
+   all, click **"Синхронизировать"** on the dashboard: it looks up the
+   app's installations for your GitHub account directly
+   (`GET /app/installations`) and lists the repos in it, so you can pick
+   one to connect explicitly, without ever needing GitHub to call us
+   back.
 3. **Chat** — click "Чат" on a repository once its status is "Готов"
    (ready). Type a question; the answer streams in token by token, with
    the source files/lines shown above it once retrieval finishes. Rate

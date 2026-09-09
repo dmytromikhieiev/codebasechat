@@ -30,17 +30,31 @@ def _is_local() -> bool:
     return os.environ.get("APP_ENV") == "local"
 
 
+async def _raise_for_github_error(response: httpx.Response) -> None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise ApiError(
+            502,
+            "github_api_error",
+            f"GitHub API вернул {response.status_code} для {response.request.url}",
+        ) from exc
+
+
 @router.get("/login")
 async def login(request: Request) -> RedirectResponse:
     client_id = os.environ["GITHUB_APP_CLIENT_ID"]
     csrf_state = pysecrets.token_urlsafe(32)
     redirect_uri = str(request.url_for("github_oauth_callback"))
 
+    # No `scope` param: unlike classic OAuth Apps, GitHub ignores it for
+    # GitHub App user-to-server auth. What the resulting token can access
+    # (e.g. /user/emails) is controlled by the App's own "Account
+    # permissions" setting, not by anything requested here.
     query = urlencode(
         {
             "client_id": client_id,
             "redirect_uri": redirect_uri,
-            "scope": "read:user user:email",
             "state": csrf_state,
         }
     )
@@ -83,7 +97,7 @@ async def callback(
             data={"client_id": client_id, "client_secret": client_secret, "code": code},
             headers={"Accept": "application/json"},
         )
-        token_response.raise_for_status()
+        await _raise_for_github_error(token_response)
         access_token = token_response.json().get("access_token")
         if not access_token:
             raise ApiError(400, "token_exchange_failed", "Не удалось получить access token от GitHub")
@@ -93,13 +107,21 @@ async def callback(
             "Accept": "application/vnd.github+json",
         }
         user_response = await http_client.get(GITHUB_USER_URL, headers=auth_headers)
-        user_response.raise_for_status()
+        await _raise_for_github_error(user_response)
         profile = user_response.json()
 
         email = profile.get("email")
         if not email:
             emails_response = await http_client.get(GITHUB_USER_EMAILS_URL, headers=auth_headers)
-            emails_response.raise_for_status()
+            if emails_response.status_code == 403:
+                raise ApiError(
+                    502,
+                    "github_email_permission_missing",
+                    "GitHub отказал в доступе к /user/emails — у GitHub App не включено "
+                    'Account permission "Email addresses: Read-only" '
+                    "(настройки приложения → Permissions & events → Account permissions)",
+                )
+            await _raise_for_github_error(emails_response)
             primary = next(
                 (e for e in emails_response.json() if e.get("primary") and e.get("verified")),
                 None,

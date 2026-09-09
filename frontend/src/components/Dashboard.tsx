@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Me, Repo, RepoDetail } from "../types";
 import { getRepo, installUrl, listRepos, logout, reindexRepo } from "../api";
 import { ChatView } from "./ChatView";
+import { RepoPicker } from "./RepoPicker";
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -23,6 +24,7 @@ export function Dashboard({ me }: { me: Me }) {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showPicker, setShowPicker] = useState(false);
 
   const refresh = useCallback(() => {
     listRepos()
@@ -62,6 +64,13 @@ export function Dashboard({ me }: { me: Me }) {
             + Подключить репозиторий
           </a>
           <button
+            onClick={() => setShowPicker((v) => !v)}
+            className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 transition hover:bg-gray-100"
+            title="Найти установки приложения для вашего аккаунта напрямую, если после установки ничего не произошло"
+          >
+            {showPicker ? "Скрыть" : "Синхронизировать"}
+          </button>
+          <button
             onClick={() => logout().then(() => window.location.reload())}
             className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 transition hover:bg-gray-100"
           >
@@ -70,6 +79,9 @@ export function Dashboard({ me }: { me: Me }) {
         </div>
       </header>
 
+      {showPicker && (
+        <RepoPicker connectedRepos={repos} onSynced={refresh} onClose={() => setShowPicker(false)} />
+      )}
       {loading && <p className="text-gray-500">Загрузка…</p>}
       {!loading && repos.length === 0 && (
         <p className="text-gray-500">Нет подключённых репозиториев — нажмите «Подключить репозиторий».</p>

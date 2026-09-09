@@ -96,6 +96,33 @@ def test_chunks_go_functions_and_type_declarations() -> None:
     assert names == {"Add", "Server"}
 
 
+def test_chunks_php_functions_classes_and_interfaces() -> None:
+    source = textwrap.dedent(
+        """\
+        <?php
+        function add($a, $b) {
+            return $a + $b;
+        }
+
+        class Greeter {
+            public function hello() {
+                return "hi";
+            }
+        }
+
+        interface Shape {
+            public function area();
+        }
+        """
+    )
+
+    chunks = chunking.chunk_file("app/Greeter.php", source)
+
+    names = {c.function_name for c in chunks if c.function_name}
+    assert names == {"add", "Greeter", "Shape"}
+    assert "hello" not in names  # method inside class is part of the class chunk
+
+
 def test_unsupported_extension_falls_back_to_line_chunking() -> None:
     source = "\n".join(f"line {i}" for i in range(5))
 

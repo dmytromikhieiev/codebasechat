@@ -37,6 +37,22 @@ async def ensure_collection(repo_id: uuid.UUID) -> None:
         )
 
 
+async def recreate_collection(repo_id: uuid.UUID) -> None:
+    """Drops and recreates the collection — for a full reindex, where every
+    point from the previous run is stale. `ensure_collection` alone would
+    leave old points orphaned forever (upsert only adds/overwrites, it
+    doesn't clear what isn't in the new batch).
+    """
+    client = _client()
+    collection_name = _collection_name(repo_id)
+    if await client.collection_exists(collection_name):
+        await client.delete_collection(collection_name)
+    await client.create_collection(
+        collection_name=collection_name,
+        vectors_config=models.VectorParams(size=QDRANT_VECTOR_SIZE, distance=DISTANCE),
+    )
+
+
 async def search(repo_id: uuid.UUID, query_vector: list[float], limit: int) -> list[models.ScoredPoint]:
     client = _client()
     collection_name = _collection_name(repo_id)

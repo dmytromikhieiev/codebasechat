@@ -39,6 +39,26 @@ async def get_installation_token(installation_id: int) -> str:
     return token
 
 
+async def list_app_installations() -> list[dict]:
+    app_jwt = await generate_app_jwt()
+    installations: list[dict] = []
+    page = 1
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        while True:
+            response = await client.get(
+                f"{GITHUB_API_BASE}/app/installations",
+                headers=_app_jwt_headers(app_jwt),
+                params={"per_page": 100, "page": page},
+            )
+            response.raise_for_status()
+            batch = response.json()
+            installations.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+    return installations
+
+
 async def list_installation_repositories(installation_id: int) -> list[dict]:
     token = await get_installation_token(installation_id)
     async with httpx.AsyncClient(timeout=10.0) as client:

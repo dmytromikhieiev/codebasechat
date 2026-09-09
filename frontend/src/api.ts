@@ -1,4 +1,4 @@
-import type { Me, Repo, RepoDetail } from "./types";
+import type { AvailableRepo, Me, Repo, RepoDetail } from "./types";
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -51,6 +51,17 @@ export function getRepo(repoId: string): Promise<RepoDetail> {
 
 export function reindexRepo(repoId: string): Promise<{ status: string }> {
   return request(`/api/v1/repos/${repoId}/reindex`, { method: "POST" });
+}
+
+export function syncInstallations(repoFullName?: string): Promise<{ synced_repos: string[] }> {
+  return request("/api/v1/github/sync", {
+    method: "POST",
+    body: JSON.stringify(repoFullName ? { repo_full_name: repoFullName } : {}),
+  });
+}
+
+export function listAvailableRepos(): Promise<AvailableRepo[]> {
+  return request<AvailableRepo[]>("/api/v1/github/available-repos");
 }
 
 export function sendFeedback(queryId: string, rating: 1 | -1, comment?: string): Promise<{ id: string }> {

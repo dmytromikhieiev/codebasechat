@@ -13,11 +13,13 @@ RAG-приложение "chat with your codebase". Пользователь п�
 ## Стек
 
 - Python 3.12, FastAPI — API-слой
+- React + Vite + TypeScript + Tailwind — фронтенд (SPA, без SSR —
+  приватный инструмент, SEO не нужен)
 - PostgreSQL — метаданные (repos, chunks, queries)
 - Qdrant — векторное хранилище
 - Redis + RQ — очередь фоновых задач индексации
 - Anthropic API (Claude) — генерация ответа
-- Voyage AI — эмбеддинги кода
+- Voyage AI — эмбеддинги кода и реранкинг
 
 ## Структура папок
 
@@ -28,11 +30,17 @@ api/            — FastAPI-приложение
   models/       — Pydantic-схемы запросов/ответов
   db/           — SQLAlchemy-модели и подключение к БД
 worker/         — фоновые задачи индексации (RQ worker)
+frontend/       — React-приложение (см. `frontend/src/`)
+  components/   — по одному компоненту на файл (LoginPage.tsx, Dashboard.tsx, ChatView.tsx, RepoPicker.tsx)
+  api.ts        — весь HTTP-доступ к бэкенду, единая точка
+  sse.ts        — ручной разбор SSE-потока для /ask (см. конвенции ниже)
+  types.ts      — общие типы (ответы API, доменные сущности)
 alembic/        — миграции БД (Alembic), versions/ — по одному файлу на ревизию
+tests/          — backend-тесты, дерево зеркалит api/ и worker/ (см. «Тесты — backend»)
 .claude/tasks/  — технические задания для Claude Code, по одному файлу на задачу
 ```
 
-## Конвенции кода
+## Конвенции кода — backend (Python/FastAPI)
 
 - **Ошибки**: никогда не глотать исключения молча. HTTP-слой возвращает
   структурированную ошибку `{"error": "<snake_case_code>", "message": "..."}`,
@@ -46,11 +54,73 @@ alembic/        — миграции БД (Alembic), versions/ — по одно
 - **Async**: все I/O-операции (БД, HTTP, очередь) — через `async def` и `await`,
   синхронный код блокирует event loop FastAPI.
 
-## Тесты
+## Конвенции кода — фронтенд (React)
 
-- Юнит-тесты рядом с кодом: `api/services/retrieval.py` → `api/services/test_retrieval.py`
+Стек: React + Vite + TypeScript (`strict: true`, не отключать) + Tailwind.
+SPA — без Next.js/SSR, роутинга на файлах, серверных компонентов и т.п.:
+на масштабе 3 экранов это не нужно, а привязка к серверному рендерингу
+не даёт ничего (приватный инструмент, не индексируется).
+
+- **Компоненты**: функциональные, один компонент на файл в `src/components/`,
+  именованный экспорт (`export function LoginPage()`) — кроме корневого
+  `App.tsx`, у него `export default` по конвенции Vite-шаблона.
+  PascalCase для имени компонента и файла.
+- **Типы**: все структуры данных — в `src/types.ts`, никаких `any`.
+  Ответ API описывается типом до того, как к нему обращается компонент,
+  а не через `as` где придётся.
+- **API-слой**: весь HTTP-доступ к бэкенду — через `src/api.ts`
+  (`credentials: "include"` на каждый запрос, ошибки — через класс
+  `ApiError`, а не голые `throw new Error(string)`). Компоненты не
+  вызывают `fetch` напрямую — единственное исключение — SSE-эндпоинты
+  через `src/sse.ts`.
+- **SSE**: `POST /api/v1/repos/{id}/ask` — это `text/event-stream`, но
+  через `POST`, а браузерный `EventSource` умеет только `GET`. Поэтому
+  `sse.ts` разбирает поток вручную (`fetch` + `ReadableStream`). Не
+  переводить на `EventSource` — не заработает с телом запроса.
+- **Состояние**: обычные хуки (`useState`/`useEffect`), без Redux/Zustand/
+  React Query. Стейт-менеджер — это архитектурное решение, а не то, что
+  добавляется по умолчанию; на нынешнем масштабе он не нужен. Если
+  экранов или расшаренного состояния станет заметно больше — сначала
+  обсудить, не тащить молча.
+- **Эффекты**: любой `setInterval`/подписка внутри `useEffect` — с
+  cleanup-функцией; для async-эффектов — флаг `cancelled`, чтобы не
+  писать в state размонтированного компонента (см. поллинг в
+  `Dashboard.tsx`).
+- **Стили**: только Tailwind-классы прямо в JSX. Не заводить CSS-модули
+  или отдельный `.css` на компонент — `src/styles.css` существует только
+  ради `@import "tailwindcss"`.
+- **Комментарии**: та же политика, что в бэкенде — по умолчанию не
+  писать, только чтобы объяснить неочевидный WHY (пример — комментарий
+  в `sse.ts` про то, почему не `EventSource`).
+- **Именование**: camelCase для функций/переменных, PascalCase для
+  компонентов и типов, `PascalCase.tsx` для файлов компонентов,
+  `camelCase.ts` для остальных модулей.
+- **Сборка**: `npm run build` (`tsc -b && vite build`) должен проходить
+  без ошибок TypeScript, прежде чем считать фронтенд-задачу выполненной
+  — аналог "тесты должны проходить" для бэкенда.
+- **Тесты**: пока не настроены. Если добавляются — Vitest + React
+  Testing Library (нативно для Vite, отдельный transform под Jest не
+  нужен), располагать рядом с компонентом (`Dashboard.tsx` →
+  `Dashboard.test.tsx`) — для фронтенда это устоявшаяся конвенция в
+  экосистеме, в отличие от backend-тестов (см. «Тесты — backend»),
+  которые лежат отдельным деревом `tests/`.
+
+## Тесты — backend
+
+- Отдельное дерево `tests/`, зеркалирующее структуру `api/`/`worker/`:
+  `api/services/retrieval.py` → `tests/api/services/test_retrieval.py`,
+  `worker/indexer.py` → `tests/worker/test_indexer.py`. Новый модуль —
+  сразу создавать зеркальный путь под `tests/`, не класть тест рядом с кодом.
+- Каждая директория с тестами — пакет (`__init__.py`), иначе при
+  одинаковых именах файлов в разных папках (`test_auth.py` в
+  `services/` и `routers/`) pytest падает на коллизии at collection time.
+- `tests/conftest.py` — общие фикстуры на весь backend (например, очистка
+  таблиц БД между тестами). `tests/api/conftest.py` — фикстуры, нужные
+  только `tests/api/**` (например, ASGI-клиент `client`).
 - Внешние вызовы (GitHub API, Anthropic API, Voyage API) всегда мокаются в тестах
-  через `respx` или `unittest.mock` — реальные сетевые запросы в тестах запрещены
+  через `respx` или `unittest.mock` — реальные сетевые запросы в тестах запрещены.
+  Postgres/Qdrant/Redis — реальные инстансы из `docker-compose` (это
+  локальная инфраструктура, а не внешний API, мокать не нужно).
 - Запуск: `docker compose exec api pytest`
 - Перед тем как считать задачу выполненной — тесты должны проходить локально
 

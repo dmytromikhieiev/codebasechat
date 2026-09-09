@@ -93,8 +93,10 @@ retrieval не заработает без данных, которые появ
 
 **AST-чанкинг** — ✅ готово, см. `.claude/tasks/chunking.md`.
 `api/services/chunking.py`: `chunk_file`/`detect_language`/`CHUNK_NODE_TYPES`,
-tree-sitter (Python/Go/JS/TS), fallback на построчный чанкинг, gap-чанки
-для кода вне функций/классов. Из-за несовместимости версий пришлось
+tree-sitter (Python/Go/JS/TS, позже добавлен PHP — грамматика уже была
+в `tree-sitter-languages`, новых зависимостей не потребовалось), fallback
+на построчный чанкинг, gap-чанки для кода вне функций/классов. Из-за
+несовместимости версий пришлось
 понизить `tree-sitter` до `0.21.3` в `requirements.txt` (`tree-sitter-languages`
 1.10.2 не работает с 0.22+).
 
@@ -156,6 +158,20 @@ Rank Fusion по `chunks.embedding_id`), `api/services/reranker.py`
   `/ask` — SSE через `POST`, что `EventSource` не поддерживает, поэтому
   парсинг потока сделан вручную (`fetch` + `ReadableStream`) — токены
   дорисовываются в UI по мере прихода, без ожидания конца генерации.
+- **Синхронизация установок без callback** — ✅. При реальной настройке
+  выяснилось, что инструкция про GitHub App была неверной: без
+  **Setup URL** GitHub вообще не редиректит браузер обратно после
+  установки, и `/api/v1/github/callback` никогда не вызывается —
+  README исправлен. Отдельно от этого добавлен путь, не зависящий от
+  редиректа вообще: `GET /app/installations` (по App JWT) сопоставляется
+  с `github_login` пользователя, без привязки к `state`/колбэку.
+  - `api/services/github_app.py::list_app_installations` (с пагинацией)
+  - `POST /api/v1/github/sync` — синхронизирует все репозитории установки
+    или один конкретный (`repo_full_name` в теле)
+  - `GET /api/v1/github/available-repos` — список репозиториев установки
+    для выбора, до того как что-то синкать
+  - `frontend/src/components/RepoPicker.tsx` — кнопка «Синхронизировать»
+    на дашборде открывает список и даёт подключить конкретный репозиторий
 
 ## Критерии готовности MVP
 

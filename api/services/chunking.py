@@ -10,6 +10,7 @@ EXTENSION_TO_LANGUAGE: dict[str, str] = {
     ".mjs": "javascript",
     ".ts": "typescript",
     ".tsx": "tsx",
+    ".php": "php",
 }
 
 # Node types treated as one indivisible chunk. Nested matches inside an
@@ -21,6 +22,7 @@ CHUNK_NODE_TYPES: dict[str, set[str]] = {
     "javascript": {"function_declaration", "class_declaration", "method_definition"},
     "typescript": {"function_declaration", "class_declaration", "method_definition", "interface_declaration"},
     "tsx": {"function_declaration", "class_declaration", "method_definition", "interface_declaration"},
+    "php": {"function_definition", "class_declaration", "method_declaration", "interface_declaration"},
 }
 
 FALLBACK_CHUNK_LINES = 100

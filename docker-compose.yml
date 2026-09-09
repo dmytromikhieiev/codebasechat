@@ -72,6 +72,7 @@ services:
     volumes:
       - ./api:/app/api
       - ./worker:/app/worker
+      - ./tests:/app/tests
     depends_on:
       postgres:
         condition: service_healthy

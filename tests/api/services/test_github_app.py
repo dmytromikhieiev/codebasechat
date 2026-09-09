@@ -111,3 +111,28 @@ async def test_compare_commits_returns_empty_list_when_no_files_key() -> None:
     files = await github_app.compare_commits(42, "octocat/hello-world", "base-sha", "head-sha")
 
     assert files == []
+
+
+@respx.mock
+async def test_list_app_installations_returns_single_page() -> None:
+    respx.get("https://api.github.com/app/installations").mock(
+        return_value=httpx.Response(200, json=[{"id": 1, "account": {"login": "octocat"}}])
+    )
+
+    installations = await github_app.list_app_installations()
+
+    assert installations == [{"id": 1, "account": {"login": "octocat"}}]
+
+
+@respx.mock
+async def test_list_app_installations_follows_pagination() -> None:
+    first_page = [{"id": i, "account": {"login": "octocat"}} for i in range(100)]
+    second_page = [{"id": 100, "account": {"login": "octocat"}}]
+    route = respx.get("https://api.github.com/app/installations").mock(
+        side_effect=[httpx.Response(200, json=first_page), httpx.Response(200, json=second_page)]
+    )
+
+    installations = await github_app.list_app_installations()
+
+    assert route.call_count == 2
+    assert len(installations) == 101

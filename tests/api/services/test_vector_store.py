@@ -78,3 +78,34 @@ async def test_delete_points_by_file_path_removes_only_matching_points(repo_id: 
 
 async def test_delete_points_by_file_path_on_missing_collection_is_noop() -> None:
     await vector_store.delete_points_by_file_path(uuid.uuid4(), "whatever.py")
+
+
+async def test_recreate_collection_drops_old_points(repo_id: uuid.UUID) -> None:
+    await vector_store.ensure_collection(repo_id)
+    stale_id = uuid.uuid4()
+    await vector_store.upsert_points(
+        repo_id,
+        [
+            vector_store.VectorPoint(
+                id=stale_id,
+                vector=[0.1] * vector_store.QDRANT_VECTOR_SIZE,
+                file_path="old.py",
+                start_line=1,
+                end_line=1,
+                function_name=None,
+            )
+        ],
+    )
+
+    await vector_store.recreate_collection(repo_id)
+
+    client = vector_store._client()
+    points = await client.retrieve(collection_name=vector_store._collection_name(repo_id), ids=[str(stale_id)])
+    assert points == []
+
+
+async def test_recreate_collection_works_when_none_existed_yet(repo_id: uuid.UUID) -> None:
+    await vector_store.recreate_collection(repo_id)  # must not raise when there's nothing to drop
+
+    client = vector_store._client()
+    assert await client.collection_exists(vector_store._collection_name(repo_id))

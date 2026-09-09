@@ -32,6 +32,9 @@ def _stub_vector_store(monkeypatch: pytest.MonkeyPatch):
     async def fake_ensure_collection(repo_id) -> None:
         pass
 
+    async def fake_recreate_collection(repo_id) -> None:
+        pass
+
     async def fake_upsert_points(repo_id, points) -> None:
         pass
 
@@ -39,6 +42,7 @@ def _stub_vector_store(monkeypatch: pytest.MonkeyPatch):
         pass
 
     monkeypatch.setattr(indexer, "ensure_collection", fake_ensure_collection)
+    monkeypatch.setattr(indexer, "recreate_collection", fake_recreate_collection)
     monkeypatch.setattr(indexer, "upsert_points", fake_upsert_points)
     monkeypatch.setattr(indexer, "delete_points_by_file_path", fake_delete_points_by_file_path)
 
@@ -85,6 +89,39 @@ async def test_run_indexing_job_populates_chunks_and_marks_repo_ready(
         assert job.progress == 1.0
         assert job.files_done == 2
         assert job.files_total == 2
+
+
+async def test_full_reindex_recreates_collection_instead_of_just_ensuring_it(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A full reindex must drop old Qdrant points, not just add new ones on
+    top — upsert-only would leave points from the previous run orphaned
+    forever. See vector_store.recreate_collection."""
+
+    async def fake_fetch_repo_files(installation_id, repo_full_name, ref) -> list[RepoFile]:
+        return [RepoFile(path="a.py", content="def foo():\n    return 1\n", language="python")]
+
+    async def fake_embed_documents(texts: list[str]) -> list[list[float]]:
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    recreate_calls = []
+    ensure_calls = []
+
+    async def fake_recreate_collection(repo_id) -> None:
+        recreate_calls.append(repo_id)
+
+    async def fake_ensure_collection(repo_id) -> None:
+        ensure_calls.append(repo_id)
+
+    monkeypatch.setattr(indexer, "fetch_repo_files", fake_fetch_repo_files)
+    monkeypatch.setattr(indexer, "embed_documents", fake_embed_documents)
+    monkeypatch.setattr(indexer, "recreate_collection", fake_recreate_collection)
+    monkeypatch.setattr(indexer, "ensure_collection", fake_ensure_collection)
+
+    await indexer._run_indexing_job(repo.id)
+
+    assert recreate_calls == [repo.id]
+    assert ensure_calls == []
 
 
 async def test_run_indexing_job_marks_failed_on_error(repo: Repo, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -207,3 +244,56 @@ async def test_incremental_indexing_renamed_file_moves_chunks(
         result = await session.execute(select(ChunkRow).where(ChunkRow.repo_id == repo.id))
         chunk_paths = {c.file_path for c in result.scalars().all()}
         assert chunk_paths == {"new_name.py"}
+
+
+async def test_index_file_commits_postgres_before_writing_to_qdrant(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash between the two writes should leave a Postgres row with a
+    missing vector (degraded but self-healing), never a Qdrant point with
+    no Postgres row behind it (a silent, permanent orphan)."""
+
+    async def fake_embed_documents(texts: list[str]) -> list[list[float]]:
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    async def fake_upsert_points(repo_id, points) -> None:
+        async with async_session_factory() as session:
+            result = await session.execute(select(ChunkRow).where(ChunkRow.repo_id == repo_id))
+            assert result.scalars().all(), "chunk rows must already be committed by the time Qdrant is written"
+
+    monkeypatch.setattr(indexer, "embed_documents", fake_embed_documents)
+    monkeypatch.setattr(indexer, "upsert_points", fake_upsert_points)
+
+    file = RepoFile(path="a.py", content="def foo():\n    return 1\n", language="python")
+    await indexer._index_file(repo.id, file)
+
+
+async def test_remove_file_deletes_postgres_before_deleting_from_qdrant(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with async_session_factory() as session:
+        session.add(
+            ChunkRow(
+                repo_id=repo.id,
+                file_path="old.py",
+                start_line=1,
+                end_line=1,
+                function_name=None,
+                language="python",
+                content="x = 1",
+                content_hash="h",
+                embedding_id=uuid_module.uuid4(),
+            )
+        )
+        await session.commit()
+
+    async def fake_delete_points_by_file_path(repo_id, file_path) -> None:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(ChunkRow).where(ChunkRow.repo_id == repo_id, ChunkRow.file_path == file_path)
+            )
+            assert result.scalars().all() == [], "Postgres row must already be deleted before Qdrant is touched"
+
+    monkeypatch.setattr(indexer, "delete_points_by_file_path", fake_delete_points_by_file_path)
+
+    await indexer._remove_file(repo.id, "old.py")

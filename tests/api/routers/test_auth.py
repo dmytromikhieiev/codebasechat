@@ -120,6 +120,40 @@ async def test_callback_falls_back_to_user_emails_when_email_private(client: Asy
         assert user.email == "privateuser@users.noreply.github.com"
 
 
+@respx.mock
+async def test_callback_reports_missing_email_permission(client: AsyncClient) -> None:
+    respx.post("https://github.com/login/oauth/access_token").mock(
+        return_value=Response(200, json={"access_token": "gho_test"})
+    )
+    respx.get("https://api.github.com/user").mock(
+        return_value=Response(200, json={"login": "privateuser", "email": None})
+    )
+    respx.get("https://api.github.com/user/emails").mock(return_value=Response(403, json={}))
+
+    client.cookies.set("oauth_state", "csrf-perm")
+    response = await client.get(
+        "/api/v1/auth/callback",
+        params={"code": "abc123", "state": "csrf-perm"},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"] == "github_email_permission_missing"
+
+
+@respx.mock
+async def test_callback_reports_generic_github_error(client: AsyncClient) -> None:
+    respx.post("https://github.com/login/oauth/access_token").mock(return_value=Response(500))
+
+    client.cookies.set("oauth_state", "csrf-500")
+    response = await client.get(
+        "/api/v1/auth/callback",
+        params={"code": "abc123", "state": "csrf-500"},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"] == "github_api_error"
+
+
 async def test_callback_rejects_mismatched_state(client: AsyncClient) -> None:
     client.cookies.set("oauth_state", "expected")
     response = await client.get(

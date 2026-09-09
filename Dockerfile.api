@@ -11,14 +11,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY api ./api
 # worker/ is only needed here so `docker compose exec api pytest` can also
-# collect worker/test_*.py — the api service never imports/runs it itself.
+# collect tests/worker/ — the api service never imports/runs it itself.
 COPY worker ./worker
+COPY tests ./tests
 # alembic.ini + alembic/ are needed here too — the one-shot `migrate`
 # service (docker-compose.yml) reuses this same image, just with a
 # different command.
 COPY alembic.ini .
 COPY alembic ./alembic
-COPY pytest.ini conftest.py .
+COPY pytest.ini .
 
 EXPOSE 8000
 
