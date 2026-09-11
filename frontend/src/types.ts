@@ -42,4 +42,5 @@ export interface ChatMessage {
   sources?: Source[];
   queryId?: string;
   feedback?: 1 | -1;
+  isError?: boolean;
 }

@@ -3,6 +3,7 @@ import uuid
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
 from api.db.models import Query as QueryRow
 from api.db.models import Repo, User
@@ -136,3 +137,66 @@ async def test_ask_streams_sources_then_tokens_then_done_and_persists_query(
         query = await session.get(QueryRow, query_id)
         assert query.answer == "Hello world"
         assert query.retrieved_chunk_ids == [{"chunk_id": str(chunk.id), "score": 0.9}]
+
+
+async def test_ask_returns_502_when_retrieval_fails_before_streaming(
+    client: AsyncClient, owner_and_repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user, repo = owner_and_repo
+
+    async def failing_hybrid_search(db, repo_id, question):
+        raise RuntimeError("Voyage is down")
+
+    monkeypatch.setattr(ask_router, "hybrid_search", failing_hybrid_search)
+
+    await _login(client, user.id)
+    response = await client.post(f"/api/v1/repos/{repo.id}/ask", json={"question": "what does foo do?"})
+
+    assert response.status_code == 502
+    assert response.json()["error"] == "retrieval_failed"
+
+
+async def test_ask_emits_error_event_when_answer_generation_fails_mid_stream(
+    client: AsyncClient, owner_and_repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure after streaming has already started (sources/tokens sent)
+    can't become a normal HTTP error status — it must show up as an SSE
+    `error` event instead of just dropping the connection."""
+    user, repo = owner_and_repo
+
+    chunk = RetrievedChunk(
+        id=uuid.uuid4(),
+        file_path="a.py",
+        start_line=1,
+        end_line=2,
+        function_name="foo",
+        language="python",
+        content="def foo(): pass",
+        score=0.9,
+    )
+
+    async def fake_hybrid_search(db, repo_id, question):
+        return [chunk]
+
+    async def fake_rerank(question, chunks, top_k=5):
+        return chunks
+
+    async def failing_stream_answer(question, chunks):
+        yield "partial answer "
+        raise RuntimeError("Your credit balance is too low")
+
+    monkeypatch.setattr(ask_router, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(ask_router, "rerank", fake_rerank)
+    monkeypatch.setattr(ask_router, "stream_answer", failing_stream_answer)
+
+    await _login(client, user.id)
+    response = await client.post(f"/api/v1/repos/{repo.id}/ask", json={"question": "what does foo do?"})
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    assert [e["event"] for e in events] == ["sources", "token", "error"]
+    assert "message" in events[2]["data"]
+
+    async with async_session_factory() as session:
+        result = await session.execute(select(QueryRow).where(QueryRow.repo_id == repo.id))
+        assert result.scalars().all() == []  # failed interaction is not persisted as a query

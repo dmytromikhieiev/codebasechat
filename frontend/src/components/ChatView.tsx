@@ -43,6 +43,15 @@ export function ChatView({ repo, onBack }: { repo: Repo; onBack: () => void }) {
           } else if (event.event === "done") {
             const { query_id } = event.data as { query_id: string };
             setMessages((prev) => updateLastAssistant(prev, (m) => ({ ...m, queryId: query_id })));
+          } else if (event.event === "error") {
+            // The backend already sent sources/tokens and hit a failure
+            // mid-stream (e.g. the LLM call itself failed) — it can't turn
+            // this into a normal HTTP error status this late, so it sends
+            // this event instead of just dropping the connection.
+            const { message } = event.data as { message: string };
+            setMessages((prev) =>
+              updateLastAssistant(prev, (m) => ({ ...m, content: m.content || message, isError: true })),
+            );
           }
         },
         controller.signal,
@@ -52,6 +61,7 @@ export function ChatView({ repo, onBack }: { repo: Repo; onBack: () => void }) {
         updateLastAssistant(prev, (m) => ({
           ...m,
           content: m.content || `Ошибка: ${err instanceof Error ? err.message : "неизвестная"}`,
+          isError: true,
         })),
       );
     } finally {
@@ -85,7 +95,11 @@ export function ChatView({ repo, onBack }: { repo: Repo; onBack: () => void }) {
             <div
               className={
                 "inline-block max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2 text-sm " +
-                (m.role === "user" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-900")
+                (m.role === "user"
+                  ? "bg-gray-900 text-white"
+                  : m.isError
+                    ? "bg-red-50 text-red-700"
+                    : "bg-gray-100 text-gray-900")
               }
             >
               {m.content || (m.role === "assistant" && sending && i === messages.length - 1 ? "…" : "")}

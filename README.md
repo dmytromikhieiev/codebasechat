@@ -19,8 +19,13 @@ Code conventions — see [`CLAUDE.md`](CLAUDE.md).
 | Indexing queue | Redis + RQ |
 | Code embeddings | Voyage AI, model `voyage-code-3` |
 | Reranking | Voyage AI, model `rerank-2` |
-| Answer generation | Anthropic Claude, model `claude-sonnet-5` |
+| Answer generation | OpenAI or Anthropic — configurable, see below |
 | Code access | GitHub App (Tarball API + Compare API), no `git clone` |
+
+Answer generation is pluggable (`api/services/answer.py`): `ANSWER_PROVIDER`
+picks `openai` (default, `gpt-4o`) or `anthropic` (`claude-sonnet-5`),
+`ANSWER_MODEL` overrides the model for whichever provider is active. Only
+the active provider's API key is required.
 
 ## Before you install
 
@@ -95,6 +100,13 @@ Postgres is published on host port **5433** (not 5432 — to avoid
 clashing with a locally installed Postgres), Qdrant on 6333/6334, Redis
 on 6379.
 
+Postgres/Qdrant/Redis data lives in `./data/` (bind-mounted, git-ignored)
+rather than a Docker-managed named volume — it survives `docker compose
+down` and rebuilds, and its path doesn't depend on which context/shell
+`docker compose` gets invoked from (named volumes are keyed by compose
+project name, which can silently drift). To fully reset local state:
+`docker compose down && rm -rf data/*/`.
+
 Check everything is up:
 
 ```bash
@@ -114,16 +126,22 @@ curl http://localhost:8000/health
 | `GITHUB_APP_CLIENT_SECRET` | GitHub App settings, OAuth credentials | yes |
 | `SESSION_SECRET_KEY` | Any random string (`openssl rand -hex 32`) | yes |
 | `FRONTEND_URL` | Where to redirect the browser after login/install | yes |
-| `ANTHROPIC_API_KEY` | console.anthropic.com | yes |
-| `VOYAGE_API_KEY` | dashboard.voyageai.com | yes |
+| `ANSWER_PROVIDER` | `openai` (default) or `anthropic` | no |
+| `ANSWER_MODEL` | Overrides the default model for the active provider | no |
+| `OPENAI_API_KEY` | platform.openai.com — only if `ANSWER_PROVIDER=openai` | yes* |
+| `ANTHROPIC_API_KEY` | console.anthropic.com — only if `ANSWER_PROVIDER=anthropic` | yes* |
+| `VOYAGE_API_KEY` | dashboard.voyageai.com — embeddings/reranking, always used | yes |
 | `VAULT_ADDR`, `VAULT_TOKEN` | Only needed if `APP_ENV != local` | no |
 | `DATABASE_URL`, `QDRANT_URL`, `REDIS_URL` | Overridden automatically in docker-compose | no |
 | `APP_ENV` | `local` — secrets are read from `.env`; otherwise — from Vault at the address above | yes |
 
+*Only the active `ANSWER_PROVIDER`'s key is actually required — the other
+one can be left as a placeholder.
+
 With `APP_ENV=local`, secrets (`GITHUB_APP_CLIENT_SECRET`, `SESSION_SECRET_KEY`,
-`VOYAGE_API_KEY`, `ANTHROPIC_API_KEY`, the App private key) are read
-directly from the environment/file. In production they go through Vault
-(`api/services/secrets.py`) — `.env` is not used for secrets there.
+`VOYAGE_API_KEY`, `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, the App private key)
+are read directly from the environment/file. In production they go through
+Vault (`api/services/secrets.py`) — `.env` is not used for secrets there.
 
 ## How to use it
 

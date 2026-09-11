@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -17,6 +18,8 @@ from api.services.auth import get_current_user
 from api.services.rate_limit import enforce_ask_rate_limit
 from api.services.reranker import rerank
 from api.services.retrieval import RetrievedChunk, hybrid_search
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/repos", tags=["ask"])
 
@@ -42,8 +45,12 @@ async def ask(
 
     await enforce_ask_rate_limit(repo_id)
 
-    candidates = await hybrid_search(db, repo_id, body.question)
-    top_chunks = await rerank(body.question, candidates, top_k=RERANK_TOP_K)
+    try:
+        candidates = await hybrid_search(db, repo_id, body.question)
+        top_chunks = await rerank(body.question, candidates, top_k=RERANK_TOP_K)
+    except Exception as exc:
+        logger.exception("retrieval failed for repo_id=%s", repo_id)
+        raise ApiError(502, "retrieval_failed", "Не удалось найти релевантный код, попробуйте ещё раз позже") from exc
 
     return StreamingResponse(
         _stream_events(db, repo_id, current_user.id, body.question, top_chunks),
@@ -72,9 +79,20 @@ async def _stream_events(
     yield _sse_event("sources", {"sources": sources})
 
     answer_parts: list[str] = []
-    async for text in stream_answer(question, chunks):
-        answer_parts.append(text)
-        yield _sse_event("token", {"text": text})
+    try:
+        async for text in stream_answer(question, chunks):
+            answer_parts.append(text)
+            yield _sse_event("token", {"text": text})
+    except Exception:
+        # Headers are already flushed (sources/token already sent) — we
+        # can't turn this into a normal HTTP error status at this point.
+        # Emit a proper SSE event instead of letting the connection just
+        # die, which the browser reports as an opaque "network error".
+        logger.exception("answer generation failed for repo_id=%s", repo_id)
+        yield _sse_event(
+            "error", {"message": "Не удалось получить ответ от модели, попробуйте ещё раз позже"}
+        )
+        return
 
     latency_ms = int((time.monotonic() - started_at) * 1000)
     query = QueryRow(
