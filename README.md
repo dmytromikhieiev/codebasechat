@@ -17,8 +17,8 @@ Code conventions — see [`CLAUDE.md`](CLAUDE.md).
 | Metadata | PostgreSQL 16 |
 | Vector store | Qdrant |
 | Indexing queue | Redis + RQ |
-| Code embeddings | Voyage AI, model `voyage-code-3` |
-| Reranking | Voyage AI, model `rerank-2` |
+| Code embeddings | Voyage AI or OpenAI — configurable, see below |
+| Reranking | Voyage AI or OpenAI — configurable, see below |
 | Answer generation | OpenAI or Anthropic — configurable, see below |
 | Code access | GitHub App (Tarball API + Compare API), no `git clone` |
 
@@ -26,6 +26,24 @@ Answer generation is pluggable (`api/services/answer.py`): `ANSWER_PROVIDER`
 picks `openai` (default, `gpt-4o`) or `anthropic` (`claude-sonnet-5`),
 `ANSWER_MODEL` overrides the model for whichever provider is active. Only
 the active provider's API key is required.
+
+Reranking is pluggable the same way (`api/services/reranker.py`):
+`RERANK_PROVIDER` picks `voyage` (default, `rerank-2`, a purpose-built
+cross-encoder) or `openai` (`gpt-4o-mini` by default) — OpenAI has no
+dedicated rerank endpoint, so that provider prompts a chat model for a
+relevance score per snippet instead; slower and pricier per call than
+Voyage's, but useful if you'd rather not hold a separate Voyage key.
+`RERANK_MODEL` overrides the model for whichever provider is active.
+
+Embeddings are pluggable too (`api/services/embeddings.py`):
+`EMBEDDING_PROVIDER` picks `voyage` (default, `voyage-code-3`, tuned for
+code) or `openai` (`text-embedding-3-small` by default). Both are made to
+output the same vector size, so the Qdrant collection schema doesn't care
+which one is active — but their vector spaces are otherwise unrelated:
+**switching `EMBEDDING_PROVIDER` on a repo that's already indexed requires
+a full reindex** (old and new vectors aren't comparable even at matching
+dimensionality). `EMBEDDING_MODEL` overrides the model for whichever
+provider is active.
 
 ## Before you install
 
@@ -100,6 +118,11 @@ Postgres is published on host port **5433** (not 5432 — to avoid
 clashing with a locally installed Postgres), Qdrant on 6333/6334, Redis
 on 6379.
 
+Qdrant ships its own web dashboard — open `http://localhost:6333/dashboard`
+to browse collections (one per repo, named `repo_<repo_id>`), inspect
+points/payloads, and run vector searches by hand. Useful for checking
+what actually got indexed without going through the app's own API.
+
 Postgres/Qdrant/Redis data lives in `./data/` (bind-mounted, git-ignored)
 rather than a Docker-managed named volume — it survives `docker compose
 down` and rebuilds, and its path doesn't depend on which context/shell
@@ -128,15 +151,19 @@ curl http://localhost:8000/health
 | `FRONTEND_URL` | Where to redirect the browser after login/install | yes |
 | `ANSWER_PROVIDER` | `openai` (default) or `anthropic` | no |
 | `ANSWER_MODEL` | Overrides the default model for the active provider | no |
-| `OPENAI_API_KEY` | platform.openai.com — only if `ANSWER_PROVIDER=openai` | yes* |
+| `OPENAI_API_KEY` | platform.openai.com — needed if `ANSWER_PROVIDER`, `RERANK_PROVIDER`, or `EMBEDDING_PROVIDER` is `openai` | yes* |
 | `ANTHROPIC_API_KEY` | console.anthropic.com — only if `ANSWER_PROVIDER=anthropic` | yes* |
-| `VOYAGE_API_KEY` | dashboard.voyageai.com — embeddings/reranking, always used | yes |
+| `RERANK_PROVIDER` | `voyage` (default) or `openai` | no |
+| `RERANK_MODEL` | Overrides the default model for the active rerank provider | no |
+| `EMBEDDING_PROVIDER` | `voyage` (default) or `openai` — switching on an already-indexed repo needs a full reindex | no |
+| `EMBEDDING_MODEL` | Overrides the default model for the active embedding provider | no |
+| `VOYAGE_API_KEY` | dashboard.voyageai.com — needed if `EMBEDDING_PROVIDER` or `RERANK_PROVIDER` is `voyage` | yes* |
 | `VAULT_ADDR`, `VAULT_TOKEN` | Only needed if `APP_ENV != local` | no |
 | `DATABASE_URL`, `QDRANT_URL`, `REDIS_URL` | Overridden automatically in docker-compose | no |
 | `APP_ENV` | `local` — secrets are read from `.env`; otherwise — from Vault at the address above | yes |
 
-*Only the active `ANSWER_PROVIDER`'s key is actually required — the other
-one can be left as a placeholder.
+*Only the API key(s) actually used by your `ANSWER_PROVIDER`/
+`RERANK_PROVIDER`/`EMBEDDING_PROVIDER` choices are required.
 
 With `APP_ENV=local`, secrets (`GITHUB_APP_CLIENT_SECRET`, `SESSION_SECRET_KEY`,
 `VOYAGE_API_KEY`, `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, the App private key)

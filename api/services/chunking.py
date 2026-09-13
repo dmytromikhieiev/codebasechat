@@ -48,15 +48,44 @@ def detect_language(file_path: str) -> str | None:
 def chunk_file(file_path: str, source: str) -> list[Chunk]:
     language = detect_language(file_path)
     if language is None or language not in CHUNK_NODE_TYPES:
-        return _chunk_by_lines(file_path, source, language or "text")
+        chunks = _chunk_by_lines(file_path, source, language or "text")
+    else:
+        try:
+            parser = get_parser(language)
+            tree = parser.parse(source.encode("utf-8"))
+        except Exception:
+            chunks = _chunk_by_lines(file_path, source, language)
+        else:
+            chunks = _chunk_by_ast(file_path, source, language, tree, CHUNK_NODE_TYPES[language])
 
-    try:
-        parser = get_parser(language)
-        tree = parser.parse(source.encode("utf-8"))
-    except Exception:
-        return _chunk_by_lines(file_path, source, language)
+    return [part for chunk in chunks for part in _split_oversized(chunk)]
 
-    return _chunk_by_ast(file_path, source, language, tree, CHUNK_NODE_TYPES[language])
+
+def _split_oversized(chunk: Chunk) -> list[Chunk]:
+    """An AST boundary match (a function/class) has no inherent size cap —
+    unlike _chunk_by_lines, a single huge function/class would otherwise
+    reach embedding-provider callers and the answer-generation prompt as one
+    oversized chunk. Split anything past FALLBACK_CHUNK_LINES into
+    sequential pieces, same cap as the line-based fallback strategy.
+    """
+    lines = chunk.content.splitlines()
+    if len(lines) <= FALLBACK_CHUNK_LINES:
+        return [chunk]
+
+    parts: list[Chunk] = []
+    for offset in range(0, len(lines), FALLBACK_CHUNK_LINES):
+        part_lines = lines[offset : offset + FALLBACK_CHUNK_LINES]
+        parts.append(
+            Chunk(
+                file_path=chunk.file_path,
+                start_line=chunk.start_line + offset,
+                end_line=chunk.start_line + offset + len(part_lines) - 1,
+                function_name=chunk.function_name,
+                language=chunk.language,
+                content="\n".join(part_lines),
+            )
+        )
+    return parts
 
 
 def _chunk_by_ast(file_path: str, source: str, language: str, tree, boundary_types: set[str]) -> list[Chunk]:

@@ -156,3 +156,19 @@ def test_parser_failure_falls_back_to_line_chunking(monkeypatch) -> None:
 
     assert len(chunks) == 1
     assert chunks[0].function_name is None
+
+
+def test_oversized_ast_chunk_is_split() -> None:
+    body = "\n".join(f"    line_{i} = {i}" for i in range(250))
+    source = f"def big():\n{body}\n"
+
+    chunks = chunking.chunk_file("pkg/big.py", source)
+
+    assert len(chunks) == 3
+    assert all(c.function_name == "big" for c in chunks)
+    assert all(len(c.content.splitlines()) <= chunking.FALLBACK_CHUNK_LINES for c in chunks)
+    # sequential, non-overlapping, and covering the whole matched node
+    assert chunks[0].start_line == 1
+    assert chunks[-1].end_line == 251
+    for prev, nxt in zip(chunks, chunks[1:]):
+        assert nxt.start_line == prev.end_line + 1

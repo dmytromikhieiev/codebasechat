@@ -27,14 +27,13 @@ def _fake_installation_token(monkeypatch: pytest.MonkeyPatch):
 
 
 @respx.mock
-async def test_fetch_repo_files_filters_excluded_dirs_and_unknown_languages() -> None:
+async def test_fetch_repo_files_filters_excluded_dirs_and_binaries() -> None:
     tarball = _build_tarball(
         {
             "src/main.py": b"def foo():\n    return 1\n",
             "node_modules/pkg/index.js": b"module.exports = {};\n",
             ".git/config": b"[core]\n",
             "vendor/lib.go": b"package vendor\n",
-            "README.md": b"# hello\n",
             "assets/logo.png": b"\x89PNG\r\n\x1a\nnotarealpng",
         }
     )
@@ -52,6 +51,49 @@ async def test_fetch_repo_files_filters_excluded_dirs_and_unknown_languages() ->
     assert paths == {"src/main.py"}
     assert files[0].language == "python"
     assert files[0].content == "def foo():\n    return 1\n"
+
+
+@respx.mock
+async def test_fetch_repo_files_includes_docs_and_config() -> None:
+    tarball = _build_tarball(
+        {
+            "README.md": b"# hello\n",
+            "docker-compose.yml": b"services:\n  api: {}\n",
+            "package.json": b'{"name": "x"}\n',
+            "Dockerfile.api": b"FROM python:3.12-slim\n",
+            ".gitignore": b"node_modules/\n",
+            "assets/logo.png": b"\x89PNG\r\n\x1a\nnotarealpng",
+        }
+    )
+    respx.get("https://api.github.com/repos/octocat/hello-world/tarball/main").mock(
+        return_value=httpx.Response(200, content=tarball)
+    )
+
+    files = await repo_fetcher.fetch_repo_files(42, "octocat/hello-world", "main")
+
+    paths = {f.path for f in files}
+    assert paths == {"README.md", "docker-compose.yml", "package.json", "Dockerfile.api", ".gitignore"}
+    assert "assets/logo.png" not in paths
+    languages = {f.path: f.language for f in files}
+    assert languages["README.md"] == "text"
+
+
+@respx.mock
+async def test_fetch_repo_files_excludes_generated_lockfiles() -> None:
+    tarball = _build_tarball(
+        {
+            "package-lock.json": b'{"lockfileVersion": 3}\n',
+            "yarn.lock": b"# yarn lockfile\n",
+            "go.sum": b"example.com/pkg v1.0.0\n",
+        }
+    )
+    respx.get("https://api.github.com/repos/octocat/hello-world/tarball/main").mock(
+        return_value=httpx.Response(200, content=tarball)
+    )
+
+    files = await repo_fetcher.fetch_repo_files(42, "octocat/hello-world", "main")
+
+    assert files == []
 
 
 @respx.mock

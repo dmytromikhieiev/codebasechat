@@ -29,6 +29,42 @@ EXCLUDED_DIR_NAMES = {
 
 MAX_FILE_SIZE_BYTES = 1_000_000  # skip generated/binary-ish files this large
 
+# Files with no recognized programming language are still worth indexing if
+# they're prose/config a question could plausibly be about (README, project
+# docs, Docker/CI config) — chunking.py already has a line-based fallback
+# chunker for exactly this case (language=None -> "text").
+TEXT_FILE_EXTENSIONS = {
+    ".md",
+    ".mdx",
+    ".rst",
+    ".txt",
+    ".yml",
+    ".yaml",
+    ".json",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".sql",
+    ".sh",
+    ".env.example",
+}
+TEXT_FILE_NAMES = {"Makefile", "LICENSE", "LICENSE.md", "Procfile", ".gitignore", ".dockerignore", ".editorconfig"}
+
+# Auto-generated lockfiles: huge, machine-written, no value for a "chat with
+# your codebase" answer — excluded even though their extension (.json/.yaml)
+# would otherwise pass the text-file check above.
+EXCLUDED_FILE_NAMES = {
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "Pipfile.lock",
+    "composer.lock",
+    "Gemfile.lock",
+    "go.sum",
+    "Cargo.lock",
+}
+
 
 @dataclasses.dataclass
 class RepoFile:
@@ -67,9 +103,11 @@ def _extract_code_files(tarball_bytes: bytes) -> list[RepoFile]:
             relative_path = _strip_archive_root(member.name)
             if relative_path is None or not _is_code_path(relative_path):
                 continue
+            if _basename(relative_path) in EXCLUDED_FILE_NAMES:
+                continue
 
             language = detect_language(relative_path)
-            if language is None:
+            if language is None and not _is_text_file(relative_path):
                 continue
 
             extracted = tar.extractfile(member)
@@ -81,7 +119,7 @@ def _extract_code_files(tarball_bytes: bytes) -> list[RepoFile]:
             except UnicodeDecodeError:
                 continue  # binary file with a misleadingly code-like extension
 
-            files.append(RepoFile(path=relative_path, content=content, language=language))
+            files.append(RepoFile(path=relative_path, content=content, language=language or "text"))
     return files
 
 
@@ -96,3 +134,14 @@ def _strip_archive_root(member_name: str) -> str | None:
 def _is_code_path(relative_path: str) -> bool:
     directory_parts = relative_path.split("/")[:-1]
     return not any(part in EXCLUDED_DIR_NAMES for part in directory_parts)
+
+
+def _basename(relative_path: str) -> str:
+    return relative_path.rsplit("/", 1)[-1]
+
+
+def _is_text_file(relative_path: str) -> bool:
+    basename = _basename(relative_path)
+    if basename in TEXT_FILE_NAMES or basename.startswith("Dockerfile"):
+        return True
+    return any(relative_path.endswith(ext) for ext in TEXT_FILE_EXTENSIONS)

@@ -192,9 +192,9 @@ Rank Fusion по `chunks.embedding_id`), `api/services/reranker.py`
   `AnthropicAnswerProvider`, выбор через `ANSWER_PROVIDER` (по умолчанию
   `openai`) + `ANSWER_MODEL` в `.env` — без правок кода. Публичная
   `stream_answer()` не поменяла сигнатуру, `api/routers/ask.py` не
-  трогали. Эмбеддинги/реранкинг остаются на Voyage — их провайдер не
-  выносился (смена меняет размерность вектора, нужна полная
-  переиндексация всех репозиториев).
+  трогали. Эмбеддинги остаются на Voyage — их провайдер не выносился
+  (смена меняет размерность вектора, нужна полная переиндексация всех
+  репозиториев). Реранкинг позже вынесен аналогично, см. следующий пункт.
 - **Данные Postgres/Qdrant/Redis — bind-mount вместо именованных volume'ов**
   — ✅. Обнаружилось, что после ребилда контейнеров репозитории пропадали
   из UI, хотя данные в Qdrant были на месте — `docker volume rm` во время
@@ -208,6 +208,61 @@ Rank Fusion по `chunks.embedding_id`), `api/services/reranker.py`
   именованные volume'ы (`rag-codebase-chat_*`) не удалялись автоматически,
   но и не используются — можно почистить вручную (`docker volume rm`),
   если не нужны.
+- **Конфигурируемый провайдер реранкинга** — ✅, см.
+  `.claude/tasks/rerank-provider-openai.md`. По аналогии с
+  `answer.py` — `api/services/reranker.py` теперь `RerankProvider(ABC)`
+  с реализациями `VoyageRerankProvider` (дефолт, `rerank-2`,
+  специализированный cross-encoder) и `OpenAIRerankProvider`, выбор
+  через `RERANK_PROVIDER` + `RERANK_MODEL` в `.env` — без правок кода.
+  У OpenAI нет отдельного rerank-эндпоинта, поэтому эта реализация
+  просит чат-модель (`gpt-4o-mini` по умолчанию) оценить релевантность
+  каждого сниппета через structured output (`response_format:
+  json_schema`) — медленнее и дороже на вызов, чем Voyage, но не
+  требует отдельного ключа. Публичная `rerank()` не поменяла сигнатуру,
+  `api/routers/ask.py` не трогали.
+- **Конфигурируемый провайдер эмбеддингов** — ✅, см.
+  `.claude/tasks/embedding-provider-openai.md`. Та же схема —
+  `api/services/embeddings.py` теперь `EmbeddingProvider(ABC)` с
+  `VoyageEmbeddingProvider` (дефолт, `voyage-code-3`) и
+  `OpenAIEmbeddingProvider` (`text-embedding-3-small` по умолчанию),
+  выбор через `EMBEDDING_PROVIDER` + `EMBEDDING_MODEL`. Отличие от
+  answer/rerank: у эмбеддингов есть жёсткий контракт по размерности —
+  Qdrant-коллекция создаётся с фиксированным `QDRANT_VECTOR_SIZE = 1024`
+  (`api/services/vector_store.py`), поэтому `OpenAIEmbeddingProvider`
+  запрашивает `dimensions=1024` у `text-embedding-3-*` (OpenAI умеет
+  урезать нативный вывод), чтобы схема коллекции не зависела от
+  провайдера. Это решает совместимость схемы, но не данных: векторы
+  разных провайдеров живут в разных пространствах, поэтому смена
+  `EMBEDDING_PROVIDER` на уже проиндексированном репозитории требует
+  полного реиндекса (кнопка «Переиндексировать») — в отличие от
+  answer/rerank, это не бесплатное переключение конфига. Публичные
+  `embed_documents()`/`embed_query()` не поменяли сигнатуру,
+  `worker/indexer.py`/`api/services/retrieval.py` не трогали.
+- **Тесты больше не бьют по dev-базе** — ✅. Обнаружилось, что
+  `tests/conftest.py`'s автоюз-фикстура (чистит `users`, каскадом —
+  `repos`/`chunks`/`indexing_jobs`, после каждого теста) работала против
+  той же самой базы `rag`, что и запущенное приложение (`DATABASE_URL` в
+  `docker-compose.yml` — один и тот же для `api`/`worker`/тестов). Каждый
+  `pytest`-прогон в рамках проверки очередного фикса тихо стирал реальные
+  `repos`/`chunks` пользователя. `tests/conftest.py` теперь переключает
+  `DATABASE_URL` на отдельную `rag_test` (создаёт и мигрирует до `head`
+  через Alembic перед первым тестом, до того как что-либо успевает
+  импортировать `api.db.session`) — тесты больше не видят и не трогают
+  dev-данные.
+- **Индексация не только кода, но и текстовых/конфиг-файлов** — ✅, см.
+  `.claude/tasks/repo-fetcher-text-files.md`. Пользователь заподозрил, что
+  файлы верхнего уровня не индексируются — на деле дело было не в глубине
+  пути, а в типе файла: `repo_fetcher.py` изначально (осознанно, по
+  исходному ТЗ) отбрасывал любой файл без распознанного языка
+  программирования, а корень репозитория обычно набит именно такими
+  файлами (`README.md`, `docker-compose.yml`, `Dockerfile*` и т.д.), тогда
+  как вложенные пути — в основном код. `TEXT_FILE_EXTENSIONS`/
+  `TEXT_FILE_NAMES` теперь дополнительно пропускают такие файлы
+  (`language="text"`, попадают в уже существовавший, но фактически
+  недостижимый построчный fallback-чанкинг `chunking.py`), а
+  `EXCLUDED_FILE_NAMES` явно отсекает сгенерированные лок-файлы
+  (`package-lock.json`, `yarn.lock`, `go.sum` и т.п.), несмотря на то что
+  их расширение формально текстовое.
 
 ## Критерии готовности MVP
 

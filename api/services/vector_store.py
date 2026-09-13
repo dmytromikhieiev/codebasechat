@@ -4,7 +4,10 @@ import uuid
 
 from qdrant_client import AsyncQdrantClient, models
 
-# voyage-code-3 default output dimensionality
+# Fixed contract every embedding provider must match (see
+# api/services/embeddings.py) — voyage-code-3's native output size; OpenAI
+# providers request this via the `dimensions` param instead of their native
+# size, so the collection schema stays the same regardless of provider.
 QDRANT_VECTOR_SIZE = 1024
 DISTANCE = models.Distance.COSINE
 
