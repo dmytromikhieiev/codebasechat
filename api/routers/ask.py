@@ -17,7 +17,7 @@ from api.services.answer import stream_answer
 from api.services.auth import get_current_user
 from api.services.rate_limit import enforce_ask_rate_limit
 from api.services.reranker import rerank
-from api.services.retrieval import RetrievedChunk, hybrid_search
+from api.services.retrieval import RetrievedChunk, find_mentioned_file_chunks, hybrid_search
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,18 @@ async def ask(
 
     try:
         candidates = await hybrid_search(db, repo_id, body.question)
-        top_chunks = await rerank(body.question, candidates, top_k=RERANK_TOP_K)
+        pinned_chunks = await find_mentioned_file_chunks(db, repo_id, body.question)
+
+        # Pinned chunks are guaranteed a spot — reranking would otherwise let
+        # an unrelated file that scores higher push the explicitly-named
+        # file's own chunks out of the top-K entirely (see .claude/tasks/
+        # explicit-file-mention.md).
+        pinned_ids = {chunk.id for chunk in pinned_chunks}
+        remaining_candidates = [c for c in candidates if c.id not in pinned_ids]
+        remaining_top_k = max(RERANK_TOP_K - len(pinned_chunks), 1)
+        reranked_chunks = await rerank(body.question, remaining_candidates, top_k=remaining_top_k)
+
+        top_chunks = pinned_chunks + reranked_chunks
     except Exception as exc:
         logger.exception("retrieval failed for repo_id=%s", repo_id)
         raise ApiError(502, "retrieval_failed", "Не удалось найти релевантный код, попробуйте ещё раз позже") from exc

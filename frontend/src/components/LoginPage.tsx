@@ -9,7 +9,7 @@ export function LoginPage() {
         href={loginUrl()}
         className="rounded-lg bg-gray-900 px-5 py-2.5 text-white transition hover:bg-gray-700"
       >
-        Войти через GitHub
+        Sign in with GitHub
       </a>
     </div>
   );

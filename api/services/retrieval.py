@@ -13,6 +13,13 @@ VECTOR_TOP_K = 20
 HYBRID_TOP_K = 20
 RRF_K = 60
 
+# A question naming a specific file (e.g. "explain docker-compose.prod.yml")
+# can lose to other files in the generic top-K fusion above — another file
+# mentioning the same words in prose can easily outscore it. Capped so one
+# pinned file can't by itself blow the answer model's context/rate budget
+# (see OPENAI_MAX_INPUT_TOKENS in embeddings.py for the same class of guard).
+MAX_PINNED_FILE_CHUNKS = 5
+
 
 @dataclasses.dataclass
 class RetrievedChunk:
@@ -33,6 +40,67 @@ async def hybrid_search(db: AsyncSession, repo_id: uuid.UUID, query: str) -> lis
     fused_ids = _reciprocal_rank_fusion([bm25_ids, vector_ids])[:HYBRID_TOP_K]
 
     return await _load_chunks(db, repo_id, fused_ids)
+
+
+async def find_mentioned_file_chunks(db: AsyncSession, repo_id: uuid.UUID, question: str) -> list[RetrievedChunk]:
+    """If the question names one of the repo's actual indexed files (by
+    basename), return that file's chunks in full (capped), so it can be
+    guaranteed a spot in the answer's context instead of merely competing
+    for a rerank slot against unrelated files that happen to score higher.
+    """
+    file_paths = await _list_indexed_file_paths(db, repo_id)
+    matched = _find_mentioned_file_path(question, file_paths)
+    if matched is None:
+        return []
+    return await _load_file_chunks(db, repo_id, matched, MAX_PINNED_FILE_CHUNKS)
+
+
+def _find_mentioned_file_path(question: str, file_paths: list[str]) -> str | None:
+    question_lower = question.lower()
+    matches = [path for path in file_paths if _basename(path).lower() in question_lower]
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+
+    # Same basename in multiple directories (monorepo-style) — prefer a
+    # match whose full path also appears in the question; failing that,
+    # the shallowest path is the least arbitrary guess.
+    full_path_matches = [path for path in matches if path.lower() in question_lower]
+    candidates = full_path_matches or matches
+    return min(candidates, key=lambda path: path.count("/"))
+
+
+def _basename(path: str) -> str:
+    return path.rsplit("/", 1)[-1]
+
+
+async def _list_indexed_file_paths(db: AsyncSession, repo_id: uuid.UUID) -> list[str]:
+    stmt = select(ChunkRow.file_path).where(ChunkRow.repo_id == repo_id).distinct()
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def _load_file_chunks(db: AsyncSession, repo_id: uuid.UUID, file_path: str, limit: int) -> list[RetrievedChunk]:
+    stmt = (
+        select(ChunkRow)
+        .where(ChunkRow.repo_id == repo_id, ChunkRow.file_path == file_path)
+        .order_by(ChunkRow.start_line)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return [
+        RetrievedChunk(
+            id=row.id,
+            file_path=row.file_path,
+            start_line=row.start_line,
+            end_line=row.end_line,
+            function_name=row.function_name,
+            language=row.language,
+            content=row.content,
+        )
+        for row in result.scalars().all()
+    ]
 
 
 async def _bm25_search(db: AsyncSession, repo_id: uuid.UUID, query: str) -> list[uuid.UUID]:

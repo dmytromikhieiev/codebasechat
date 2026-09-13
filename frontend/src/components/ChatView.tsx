@@ -60,7 +60,7 @@ export function ChatView({ repo, onBack }: { repo: Repo; onBack: () => void }) {
       setMessages((prev) =>
         updateLastAssistant(prev, (m) => ({
           ...m,
-          content: m.content || `Ошибка: ${err instanceof Error ? err.message : "неизвестная"}`,
+          content: m.content || `Error: ${err instanceof Error ? err.message : "unknown"}`,
           isError: true,
         })),
       );
@@ -81,14 +81,14 @@ export function ChatView({ repo, onBack }: { repo: Repo; onBack: () => void }) {
     <div className="mx-auto flex h-screen max-w-3xl flex-col p-4">
       <header className="mb-4 flex items-center gap-3 border-b border-gray-200 pb-3">
         <button onClick={onBack} className="text-sm text-gray-500 hover:text-gray-900">
-          ← Назад
+          ← Back
         </button>
         <h2 className="font-medium text-gray-900">{repo.repo_full_name}</h2>
       </header>
 
       <div className="flex-1 space-y-4 overflow-y-auto py-4">
         {messages.length === 0 && (
-          <p className="text-sm text-gray-400">Задайте вопрос о коде этого репозитория.</p>
+          <p className="text-sm text-gray-400">Ask a question about this repository's code.</p>
         )}
         {messages.map((m, i) => (
           <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
@@ -137,7 +137,7 @@ export function ChatView({ repo, onBack }: { repo: Repo; onBack: () => void }) {
         <input
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
-          placeholder="Спросите что-нибудь о коде…"
+          placeholder="Ask something about the code…"
           className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
           disabled={sending}
         />
@@ -146,7 +146,7 @@ export function ChatView({ repo, onBack }: { repo: Repo; onBack: () => void }) {
           disabled={sending || !question.trim()}
           className="rounded-lg bg-gray-900 px-4 py-2 text-sm text-white transition disabled:opacity-40"
         >
-          Отправить
+          Send
         </button>
       </form>
     </div>

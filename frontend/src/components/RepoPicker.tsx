@@ -19,7 +19,7 @@ export function RepoPicker({
   useEffect(() => {
     listAvailableRepos()
       .then(setAvailable)
-      .catch((e) => setError(e instanceof ApiError ? e.message : "Не удалось получить список репозиториев"));
+      .catch((e) => setError(e instanceof ApiError ? e.message : "Failed to load the list of repositories"));
   }, []);
 
   const connectedNames = new Set(connectedRepos.map((r) => r.repo_full_name));
@@ -32,7 +32,7 @@ export function RepoPicker({
       setJustConnected((prev) => new Set(prev).add(repoFullName));
       onSynced();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Не удалось подключить репозиторий");
+      setError(e instanceof ApiError ? e.message : "Failed to connect the repository");
     } finally {
       setConnecting(null);
     }
@@ -41,16 +41,16 @@ export function RepoPicker({
   return (
     <div className="mb-4 rounded-lg border border-gray-200 p-4">
       <div className="mb-2 flex items-center justify-between">
-        <p className="text-sm font-medium text-gray-900">Доступные репозитории</p>
+        <p className="text-sm font-medium text-gray-900">Available repositories</p>
         <button onClick={onClose} className="text-sm text-gray-400 hover:text-gray-700">
-          Закрыть
+          Close
         </button>
       </div>
 
       {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
-      {available === null && !error && <p className="text-sm text-gray-500">Загрузка…</p>}
+      {available === null && !error && <p className="text-sm text-gray-500">Loading…</p>}
       {available !== null && available.length === 0 && (
-        <p className="text-sm text-gray-500">Установка найдена, но репозиториев в ней нет.</p>
+        <p className="text-sm text-gray-500">Installation found, but it has no repositories.</p>
       )}
 
       <ul className="space-y-2">
@@ -60,14 +60,14 @@ export function RepoPicker({
             <li key={repo.repo_full_name} className="flex items-center justify-between text-sm">
               <span className="text-gray-800">{repo.repo_full_name}</span>
               {isConnected ? (
-                <span className="text-green-600">Подключён</span>
+                <span className="text-green-600">Connected</span>
               ) : (
                 <button
                   onClick={() => connect(repo.repo_full_name)}
                   disabled={connecting === repo.repo_full_name}
                   className="rounded-lg border border-gray-300 px-3 py-1 text-xs text-gray-700 transition hover:bg-gray-100 disabled:opacity-40"
                 >
-                  {connecting === repo.repo_full_name ? "Подключаем…" : "Подключить"}
+                  {connecting === repo.repo_full_name ? "Connecting…" : "Connect"}
                 </button>
               )}
             </li>

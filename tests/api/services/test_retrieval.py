@@ -118,3 +118,58 @@ async def test_hybrid_search_scopes_to_repo(repo_with_chunks: Repo) -> None:
         results = await retrieval.hybrid_search(db, uuid.uuid4(), "zebra")
 
     assert results == []
+
+
+# --- find_mentioned_file_chunks ---------------------------------------------
+
+
+async def test_find_mentioned_file_chunks_returns_named_file(repo_with_chunks: Repo) -> None:
+    async with async_session_factory() as db:
+        results = await retrieval.find_mentioned_file_chunks(db, repo_with_chunks.id, "explain both.py in detail")
+
+    assert [r.file_path for r in results] == ["both.py"]
+
+
+async def test_find_mentioned_file_chunks_returns_empty_when_no_file_named(repo_with_chunks: Repo) -> None:
+    async with async_session_factory() as db:
+        results = await retrieval.find_mentioned_file_chunks(db, repo_with_chunks.id, "how does auth work?")
+
+    assert results == []
+
+
+async def test_find_mentioned_file_chunks_scoped_to_repo(repo_with_chunks: Repo) -> None:
+    async with async_session_factory() as db:
+        results = await retrieval.find_mentioned_file_chunks(db, uuid.uuid4(), "explain both.py")
+
+    assert results == []
+
+
+# --- _find_mentioned_file_path (pure, no DB) --------------------------------
+
+
+def test_find_mentioned_file_path_matches_basename() -> None:
+    paths = ["src/api/main.py", "README.md"]
+
+    assert retrieval._find_mentioned_file_path("tell me about README.md", paths) == "README.md"
+
+
+def test_find_mentioned_file_path_no_match_returns_none() -> None:
+    paths = ["src/api/main.py", "README.md"]
+
+    assert retrieval._find_mentioned_file_path("how does retrieval work?", paths) is None
+
+
+def test_find_mentioned_file_path_prefers_full_path_on_basename_collision() -> None:
+    paths = ["services/index.js", "web/index.js"]
+
+    result = retrieval._find_mentioned_file_path("what does web/index.js do?", paths)
+
+    assert result == "web/index.js"
+
+
+def test_find_mentioned_file_path_falls_back_to_shallowest_on_ambiguous_collision() -> None:
+    paths = ["a/deep/nested/index.js", "b/index.js"]
+
+    result = retrieval._find_mentioned_file_path("what does index.js do?", paths)
+
+    assert result == "b/index.js"

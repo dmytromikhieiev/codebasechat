@@ -14,7 +14,7 @@ export default function App() {
   }, []);
 
   if (me === "loading") {
-    return <div className="flex h-screen items-center justify-center text-gray-500">Загрузка…</div>;
+    return <div className="flex h-screen items-center justify-center text-gray-500">Loading…</div>;
   }
 
   if (me === null) {

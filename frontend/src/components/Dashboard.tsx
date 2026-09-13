@@ -7,10 +7,10 @@ import { RepoPicker } from "./RepoPicker";
 const POLL_INTERVAL_MS = 3000;
 
 const STATUS_LABELS: Record<Repo["status"], string> = {
-  pending_first_index: "Ожидает индексации",
-  indexing: "Индексируется…",
-  ready: "Готов",
-  failed: "Ошибка индексации",
+  pending_first_index: "Pending indexing",
+  indexing: "Indexing…",
+  ready: "Ready",
+  failed: "Indexing failed",
 };
 
 const STATUS_COLORS: Record<Repo["status"], string> = {
@@ -61,20 +61,20 @@ export function Dashboard({ me }: { me: Me }) {
             href={installUrl()}
             className="rounded-lg bg-gray-900 px-4 py-2 text-sm text-white transition hover:bg-gray-700"
           >
-            + Подключить репозиторий
+            + Connect repository
           </a>
           <button
             onClick={() => setShowPicker((v) => !v)}
             className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 transition hover:bg-gray-100"
-            title="Найти установки приложения для вашего аккаунта напрямую, если после установки ничего не произошло"
+            title="Look up your account's app installations directly, if nothing happened after installing"
           >
-            {showPicker ? "Скрыть" : "Синхронизировать"}
+            {showPicker ? "Hide" : "Sync"}
           </button>
           <button
             onClick={() => logout().then(() => window.location.reload())}
             className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 transition hover:bg-gray-100"
           >
-            Выйти
+            Sign out
           </button>
         </div>
       </header>
@@ -82,9 +82,9 @@ export function Dashboard({ me }: { me: Me }) {
       {showPicker && (
         <RepoPicker connectedRepos={repos} onSynced={refresh} onClose={() => setShowPicker(false)} />
       )}
-      {loading && <p className="text-gray-500">Загрузка…</p>}
+      {loading && <p className="text-gray-500">Loading…</p>}
       {!loading && repos.length === 0 && (
-        <p className="text-gray-500">Нет подключённых репозиториев — нажмите «Подключить репозиторий».</p>
+        <p className="text-gray-500">No connected repositories yet — click “Connect repository”.</p>
       )}
 
       <ul className="space-y-3">
@@ -130,7 +130,7 @@ function RepoRow({ repo, onOpen, onReindex }: { repo: Repo; onOpen: () => void; 
         <p className={`text-sm ${STATUS_COLORS[repo.status]}`}>{STATUS_LABELS[repo.status]}</p>
         {repo.status === "indexing" && detail?.files_total ? (
           <p className="text-xs text-gray-400">
-            {detail.files_done ?? 0}/{detail.files_total} файлов
+            {detail.files_done ?? 0}/{detail.files_total} files
           </p>
         ) : null}
       </div>
@@ -140,7 +140,7 @@ function RepoRow({ repo, onOpen, onReindex }: { repo: Repo; onOpen: () => void; 
             onClick={onOpen}
             className="rounded-lg bg-gray-900 px-3 py-1.5 text-sm text-white transition hover:bg-gray-700"
           >
-            Чат
+            Chat
           </button>
         )}
         {repo.status !== "indexing" && (
@@ -148,7 +148,7 @@ function RepoRow({ repo, onOpen, onReindex }: { repo: Repo; onOpen: () => void; 
             onClick={onReindex}
             className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 transition hover:bg-gray-100"
           >
-            Переиндексировать
+            Reindex
           </button>
         )}
       </div>

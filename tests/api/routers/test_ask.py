@@ -5,6 +5,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from api.db.models import Chunk as ChunkRow
 from api.db.models import Query as QueryRow
 from api.db.models import Repo, User
 from api.db.session import async_session_factory
@@ -137,6 +138,66 @@ async def test_ask_streams_sources_then_tokens_then_done_and_persists_query(
         query = await session.get(QueryRow, query_id)
         assert query.answer == "Hello world"
         assert query.retrieved_chunk_ids == [{"chunk_id": str(chunk.id), "score": 0.9}]
+
+
+async def test_ask_pins_explicitly_mentioned_file_over_reranked_chunks(
+    client: AsyncClient, owner_and_repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user, repo = owner_and_repo
+
+    async with async_session_factory() as session:
+        session.add(
+            ChunkRow(
+                repo_id=repo.id,
+                file_path="docker-compose.prod.yml",
+                start_line=1,
+                end_line=10,
+                function_name=None,
+                language="text",
+                content="services:\n  api: {}\n",
+                content_hash="h1",
+                embedding_id=uuid.uuid4(),
+            )
+        )
+        await session.commit()
+
+    other_chunk = RetrievedChunk(
+        id=uuid.uuid4(),
+        file_path="DEPLOY.md",
+        start_line=1,
+        end_line=2,
+        function_name=None,
+        language="text",
+        content="see docker-compose for deployment details",
+        score=0.9,
+    )
+
+    async def fake_hybrid_search(db, repo_id, question):
+        return [other_chunk]
+
+    rerank_top_k_calls = []
+
+    async def fake_rerank(question, chunks, top_k=5):
+        rerank_top_k_calls.append(top_k)
+        return chunks
+
+    async def fake_stream_answer(question, chunks):
+        yield "answer"
+
+    monkeypatch.setattr(ask_router, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(ask_router, "rerank", fake_rerank)
+    monkeypatch.setattr(ask_router, "stream_answer", fake_stream_answer)
+
+    await _login(client, user.id)
+    response = await client.post(
+        f"/api/v1/repos/{repo.id}/ask", json={"question": "tell me about docker-compose.prod.yml"}
+    )
+
+    assert response.status_code == 200
+    sources = _parse_sse(response.text)[0]["data"]["sources"]
+    assert sources[0]["file_path"] == "docker-compose.prod.yml"  # pinned chunk goes first
+    assert any(s["file_path"] == "DEPLOY.md" for s in sources)  # reranked chunk still included
+    assert rerank_top_k_calls == [4]  # RERANK_TOP_K(5) minus the 1 pinned chunk
 
 
 async def test_ask_returns_502_when_retrieval_fails_before_streaming(
