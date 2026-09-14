@@ -1,7 +1,7 @@
 import dataclasses
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.models import Chunk as ChunkRow
@@ -12,6 +12,39 @@ BM25_TOP_K = 20
 VECTOR_TOP_K = 20
 HYBRID_TOP_K = 20
 RRF_K = 60
+
+# file_path/function_name matches outrank a plain content match — a question
+# naming a file/symbol should surface it even if another file mentions the
+# same words in prose (see .claude/tasks/pg-search-bm25.md). `lenient` on
+# every parse_with_field call keeps a natural-language question (parens,
+# apostrophes, unbalanced quotes) from raising a Tantivy query-parse error;
+# it doesn't suppress capitalized AND/OR being read as boolean operators
+# (verified interactively — a rare, acceptable false-negative for MVP).
+FILE_PATH_BOOST = 3.0
+FUNCTION_NAME_BOOST = 2.0
+
+_BM25_QUERY = text(
+    """
+    SELECT embedding_id
+    FROM chunks
+    WHERE repo_id = :repo_id
+      AND id @@@ paradedb.boolean(
+            should => ARRAY[
+                paradedb.boost(
+                    factor => :file_path_boost,
+                    query => paradedb.parse_with_field('file_path', :query, lenient => true)
+                ),
+                paradedb.boost(
+                    factor => :function_name_boost,
+                    query => paradedb.parse_with_field('function_name', :query, lenient => true)
+                ),
+                paradedb.parse_with_field('content', :query, lenient => true)
+            ]
+        )
+    ORDER BY paradedb.score(id) DESC
+    LIMIT :limit
+    """
+)
 
 # A question naming a specific file (e.g. "explain docker-compose.prod.yml")
 # can lose to other files in the generic top-K fusion above — another file
@@ -104,15 +137,16 @@ async def _load_file_chunks(db: AsyncSession, repo_id: uuid.UUID, file_path: str
 
 
 async def _bm25_search(db: AsyncSession, repo_id: uuid.UUID, query: str) -> list[uuid.UUID]:
-    tsquery = func.plainto_tsquery("english", query)
-    tsvector = func.to_tsvector("english", ChunkRow.content)
-    stmt = (
-        select(ChunkRow.embedding_id)
-        .where(ChunkRow.repo_id == repo_id, tsvector.op("@@")(tsquery))
-        .order_by(func.ts_rank(tsvector, tsquery).desc())
-        .limit(BM25_TOP_K)
+    result = await db.execute(
+        _BM25_QUERY,
+        {
+            "repo_id": repo_id,
+            "query": query,
+            "file_path_boost": FILE_PATH_BOOST,
+            "function_name_boost": FUNCTION_NAME_BOOST,
+            "limit": BM25_TOP_K,
+        },
     )
-    result = await db.execute(stmt)
     return list(result.scalars().all())
 
 

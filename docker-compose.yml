@@ -1,7 +1,12 @@
 services:
 
   postgres:
-    image: postgres:16-alpine
+    image: paradedb/paradedb:latest-pg16
+    # pg_search registers a custom WAL resource manager and must be loaded
+    # at server start, not by CREATE EXTENSION alone. shared_buffers bumped
+    # from Postgres's default-tuned 400kB — building a bm25 index needs more
+    # pinned buffers than that ("no unpinned buffers available" otherwise).
+    command: postgres -c shared_preload_libraries=pg_search -c shared_buffers=128MB
     restart: unless-stopped
     environment:
       POSTGRES_USER: rag

@@ -106,10 +106,25 @@ class Chunk(Base):
     __table_args__ = (
         Index("idx_chunks_repo_id", "repo_id"),
         Index("idx_chunks_repo_file", "repo_id", "file_path"),
+        # Mirrors alembic/versions/0002_pg_search_bm25.py — idx_chunks_content_fts
+        # (to_tsvector('english', ...)) was dropped there in favor of this.
         Index(
-            "idx_chunks_content_fts",
-            text("to_tsvector('english', content)"),
-            postgresql_using="gin",
+            "idx_chunks_bm25",
+            "id",
+            "content",
+            "file_path",
+            "function_name",
+            postgresql_using="bm25",
+            postgresql_with={
+                "key_field": "'id'",
+                "text_fields": (
+                    "'{"
+                    '"content": {"tokenizer": {"type": "source_code"}}, '
+                    '"file_path": {"tokenizer": {"type": "source_code"}}, '
+                    '"function_name": {"tokenizer": {"type": "source_code"}}'
+                    "}'"
+                ),
+            },
         ),
     )
 
